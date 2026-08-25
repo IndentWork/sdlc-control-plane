@@ -1,0 +1,87 @@
+name: Deploy Control Plane
+
+# Manually triggered — select environment before deploying.
+# Flow:
+#   1. Build Docker image
+#   2. Push to Azure Container Registry (crsdlc{env})
+#   3. Update Container App with new image (triggers restart + migration + API start)
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment to deploy to"
+        required: true
+        type: choice
+        options:
+          - DEV
+          - PROD
+
+jobs:
+  deploy:
+    name: "Build and Deploy (${{ inputs.env }})"
+    runs-on: ubuntu-latest
+
+    # SP credentials looked up dynamically from org-level secrets using uppercase ENV.
+    env:
+      ARM_CLIENT_ID:       ${{ secrets[format('SDLC_{0}_AZURE_CLIENT_ID_TERRAFORM', inputs.env)] }}
+      ARM_CLIENT_SECRET:   ${{ secrets[format('SDLC_{0}_AZURE_CLIENT_SECRET_TERRAFORM', inputs.env)] }}
+      ARM_TENANT_ID:       ${{ secrets[format('SDLC_{0}_AZURE_TENANT_ID_TERRAFORM', inputs.env)] }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets[format('SDLC_{0}_AZURE_SUBSCRIPTION_ID_TERRAFORM', inputs.env)] }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Convert DEV → dev for resource names and image tags
+      - name: Set lowercase env
+        run: echo "ENV_LOWER=$(echo '${{ inputs.env }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      # Resource names derived from naming convention — no hardcoding needed
+      - name: Set resource names
+        run: |
+          echo "ACR_NAME=crsdlc${{ env.ENV_LOWER }}"                          >> $GITHUB_ENV
+          echo "ACR_SERVER=crsdlc${{ env.ENV_LOWER }}.azurecr.io"             >> $GITHUB_ENV
+          echo "CONTAINER_APP=ca-sdlc-base-${{ env.ENV_LOWER }}"              >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=rg-sdlc-base-${{ env.ENV_LOWER }}"             >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ github.sha }}"                                   >> $GITHUB_ENV
+
+      - name: Azure Login
+        run: |
+          az login --service-principal \
+            --username "$ARM_CLIENT_ID" \
+            --password "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID"
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      # Login to ACR so docker push is authenticated
+      - name: Login to Container Registry
+        run: az acr login --name "${{ env.ACR_NAME }}"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}" \
+            -t "${{ env.ACR_SERVER }}/control-plane:latest" \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}"
+          docker push "${{ env.ACR_SERVER }}/control-plane:latest"
+
+      # Update the Container App with the new image.
+      # This triggers a rolling restart — new container runs migrations then starts FastAPI.
+      - name: Deploy to Container App
+        run: |
+          az containerapp update \
+            --name "${{ env.CONTAINER_APP }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --image "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}"
+
+      - name: Show deployment URL
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.CONTAINER_APP }}" \
+            --resource-group "${{ env.RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "Deployed to: https://$FQDN"
