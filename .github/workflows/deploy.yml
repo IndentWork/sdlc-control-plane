@@ -1,10 +1,11 @@
 name: Deploy Control Plane
 
-# Manually triggered — select environment before deploying.
+# Manually triggered — select environment and provide version before deploying.
 # Flow:
-#   1. Build Docker image
-#   2. Push to Azure Container Registry (crsdlc{env})
-#   3. Update Container App with new image (triggers restart + migration + API start)
+#   1. Tag the git repo with the version
+#   2. Build Docker image tagged with version + branch + commit SHA
+#   3. Push to Azure Container Registry
+#   4. Update Container App (triggers restart → migration → FastAPI start)
 on:
   workflow_dispatch:
     inputs:
@@ -15,10 +16,14 @@ on:
         options:
           - DEV
           - PROD
+      version:
+        description: "Version tag (e.g. v0.1.0)"
+        required: true
+        type: string
 
 jobs:
   deploy:
-    name: "Build and Deploy (${{ inputs.env }})"
+    name: "Deploy ${{ inputs.version }} → ${{ inputs.env }}"
     runs-on: ubuntu-latest
 
     # SP credentials looked up dynamically from org-level secrets using uppercase ENV.
@@ -32,18 +37,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Convert DEV → dev for resource names and image tags
-      - name: Set lowercase env
-        run: echo "ENV_LOWER=$(echo '${{ inputs.env }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      # Convert DEV → dev, get branch name, short SHA for image tagging
+      - name: Set build metadata
+        run: |
+          echo "ENV_LOWER=$(echo '${{ inputs.env }}' | tr '[:upper:]' '[:lower:]')"  >> $GITHUB_ENV
+          echo "BRANCH=$(echo '${{ github.ref_name }}')"                              >> $GITHUB_ENV
+          echo "SHORT_SHA=$(echo '${{ github.sha }}' | cut -c1-7)"                   >> $GITHUB_ENV
 
-      # Resource names derived from naming convention — no hardcoding needed
+      # Resource names derived from naming convention
       - name: Set resource names
         run: |
-          echo "ACR_NAME=crsdlc${{ env.ENV_LOWER }}"                          >> $GITHUB_ENV
-          echo "ACR_SERVER=crsdlc${{ env.ENV_LOWER }}.azurecr.io"             >> $GITHUB_ENV
-          echo "CONTAINER_APP=ca-sdlc-base-${{ env.ENV_LOWER }}"              >> $GITHUB_ENV
-          echo "RESOURCE_GROUP=rg-sdlc-base-${{ env.ENV_LOWER }}"             >> $GITHUB_ENV
-          echo "IMAGE_TAG=${{ github.sha }}"                                   >> $GITHUB_ENV
+          echo "ACR_NAME=crsdlc${{ env.ENV_LOWER }}"                     >> $GITHUB_ENV
+          echo "ACR_SERVER=crsdlc${{ env.ENV_LOWER }}.azurecr.io"        >> $GITHUB_ENV
+          echo "CONTAINER_APP=ca-sdlc-base-${{ env.ENV_LOWER }}"         >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=rg-sdlc-base-${{ env.ENV_LOWER }}"        >> $GITHUB_ENV
+
+      # Full image tag — version + branch + short SHA so you can identify exactly
+      # which version and branch a running container came from.
+      # Example: v0.1.0-main-abc1234
+      - name: Set image tags
+        run: |
+          BASE="${{ env.ACR_SERVER }}/control-plane"
+          FULL_TAG="${{ inputs.version }}-${{ env.BRANCH }}-${{ env.SHORT_SHA }}"
+          echo "IMAGE_FULL=$BASE:$FULL_TAG"          >> $GITHUB_ENV
+          echo "IMAGE_VERSION=$BASE:${{ inputs.version }}" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=$BASE:latest"            >> $GITHUB_ENV
+
+      # Tag the git repo with the version so the release is traceable in git history
+      - name: Create git tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
+          git push origin "${{ inputs.version }}"
 
       - name: Azure Login
         run: |
@@ -53,35 +79,40 @@ jobs:
             --tenant "$ARM_TENANT_ID"
           az account set --subscription "$ARM_SUBSCRIPTION_ID"
 
-      # Login to ACR so docker push is authenticated
       - name: Login to Container Registry
         run: az acr login --name "${{ env.ACR_NAME }}"
 
+      # Build with all three tags at once
       - name: Build Docker image
         run: |
           docker build \
-            -t "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}" \
-            -t "${{ env.ACR_SERVER }}/control-plane:latest" \
+            -t "${{ env.IMAGE_FULL }}" \
+            -t "${{ env.IMAGE_VERSION }}" \
+            -t "${{ env.IMAGE_LATEST }}" \
             .
 
       - name: Push Docker image
         run: |
-          docker push "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}"
-          docker push "${{ env.ACR_SERVER }}/control-plane:latest"
+          docker push "${{ env.IMAGE_FULL }}"
+          docker push "${{ env.IMAGE_VERSION }}"
+          docker push "${{ env.IMAGE_LATEST }}"
 
-      # Update the Container App with the new image.
-      # This triggers a rolling restart — new container runs migrations then starts FastAPI.
+      # Deploy with the full tag so the container name tells you exactly what is running
       - name: Deploy to Container App
         run: |
           az containerapp update \
             --name "${{ env.CONTAINER_APP }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --image "${{ env.ACR_SERVER }}/control-plane:${{ env.IMAGE_TAG }}"
+            --image "${{ env.IMAGE_FULL }}"
 
-      - name: Show deployment URL
+      - name: Show deployment info
         run: |
           FQDN=$(az containerapp show \
             --name "${{ env.CONTAINER_APP }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "Deployed to: https://$FQDN"
+          echo "Version  : ${{ inputs.version }}"
+          echo "Branch   : ${{ env.BRANCH }}"
+          echo "Commit   : ${{ env.SHORT_SHA }}"
+          echo "Image    : ${{ env.IMAGE_FULL }}"
+          echo "URL      : https://$FQDN"
