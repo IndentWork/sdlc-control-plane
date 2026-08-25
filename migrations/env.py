@@ -3,6 +3,7 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+from azure.identity import DefaultAzureCredential
 
 config = context.config
 
@@ -10,34 +11,24 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
-def _is_local() -> bool:
-    return os.environ.get("LOCAL_DEV", "false").lower() == "true"
-
-
 def get_migration_url() -> str:
     """
-    Build PostgreSQL connection URL for migrations.
-    Local dev: uses regular password.
-    Azure: uses Managed Identity token — connects as Azure AD admin with DDL access.
+    Build PostgreSQL connection URL for migrations using Managed Identity token.
+    Connects as id-sdlc-base-dev (Azure AD admin) — has DDL access needed
+    to create roles, tables, and grant privileges.
     """
     host = os.environ["POSTGRES_HOST"]
-    db = os.environ.get("POSTGRES_DB", "sdlc")
+    client_id = os.environ["AZURE_CLIENT_ID"]
 
-    if _is_local():
-        user = os.environ["POSTGRES_USER"]
-        password = os.environ["POSTGRES_PASSWORD"]
-    else:
-        from azure.identity import DefaultAzureCredential
-        client_id = os.environ["AZURE_CLIENT_ID"]
-        credential = DefaultAzureCredential(managed_identity_client_id=client_id)
-        token = credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
-        user = "id-sdlc-base-dev"
-        password = token.token
+    # Get a short-lived token from Azure using the Managed Identity
+    credential = DefaultAzureCredential(managed_identity_client_id=client_id)
+    token = credential.get_token("https://ossrdbms-aad.database.windows.net/.default")
 
-    return f"postgresql+psycopg2://{user}:{password}@{host}/{db}"
+    return f"postgresql+psycopg2://id-sdlc-base-dev:{token.token}@{host}/sdlc"
 
 
 def run_migrations_online() -> None:
+    """Run migrations with a live DB connection."""
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = get_migration_url()
 
