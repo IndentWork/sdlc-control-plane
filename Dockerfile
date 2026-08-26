@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency files first — Docker layer cache: only reinstalls if these change
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies
+# Install dependencies (git is included in python:3.11 for sdlc-shared install)
 RUN uv sync --frozen --no-dev
 
 # Copy application code
