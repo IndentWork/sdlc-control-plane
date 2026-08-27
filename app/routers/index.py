@@ -1,38 +1,32 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+
+from app.db import get_db_session
+from app.schemas.index import IndexRequest, IndexResponse
+from app.security import hash_key
 
 router = APIRouter(prefix="/index", tags=["index"])
-
-
-class IndexRequest(BaseModel):
-    tenant_key: str       # tenant authenticates with this key (SHA256 verified against DB)
-    project_name: str     # name of the project to index
-    repos: list[str]      # list of repo names to index
-
-
-class IndexResponse(BaseModel):
-    job_id: str           # caller polls this to check indexing status
-    message: str
 
 
 @router.post("", response_model=IndexResponse)
 async def request_index(request: IndexRequest) -> IndexResponse:
     """
-    Accepts an indexing request from a tenant.
+    Accept an indexing request from a tenant.
+    Verifies the tenant_key by comparing SHA256(key) against tenants.sha256_key.
 
-    Flow:
-    1. Verify tenant_key against PostgreSQL (SHA256 lookup) — NOT YET IMPLEMENTED
-    2. Get tenant endpoints (AI Search, Cosmos, Service Bus) — NOT YET IMPLEMENTED
-    3. Put message on Service Bus index-request queue — NOT YET IMPLEMENTED
-
-    For now returns a stub response so we can verify the endpoint is reachable.
+    Returns 401 if the key does not match any tenant.
+    Actual indexing (Service Bus queue push) is a later task.
     """
+    async with get_db_session() as conn:
+        tenant = await conn.fetchrow(
+            "SELECT id, name FROM tenants WHERE sha256_key = $1",
+            hash_key(request.tenant_key)
+        )
 
-    # TODO: verify tenant_key against tenants table
-    # TODO: look up tenant endpoints from tenant_endpoints table
-    # TODO: put message on Service Bus
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Invalid tenant_key")
 
+    # TODO: put message on Service Bus index-request queue
     return IndexResponse(
-        job_id="stub-job-id",
-        message=f"Index request received for project '{request.project_name}' with {len(request.repos)} repos. Processing not yet implemented.",
+        job_id=f"stub-job-{tenant['id']}",
+        message=f"Index request accepted for tenant '{tenant['name']}' — project '{request.project_name}' with {len(request.repos)} repos. Processing not yet implemented.",
     )

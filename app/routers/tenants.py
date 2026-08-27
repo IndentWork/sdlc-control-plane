@@ -1,37 +1,37 @@
+import secrets
 import uuid
+
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+
 from app.db import get_db_session
+from app.schemas.tenant import TenantCreate, TenantResponse, TenantCreateResponse
+from app.security import hash_key
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
 
-class TenantCreate(BaseModel):
-    name: str
-
-
-class TenantResponse(BaseModel):
-    id: str
-    name: str
-
-
-@router.post("", response_model=TenantResponse, status_code=201)
-async def create_tenant(body: TenantCreate) -> TenantResponse:
-    """Create a new tenant."""
+@router.post("", response_model=TenantCreateResponse, status_code=201)
+async def create_tenant(body: TenantCreate) -> TenantCreateResponse:
+    """
+    Create a new tenant.
+    Generates a random 32-byte URL-safe key, hashes it, and stores the hash.
+    Returns the plaintext key in the response — the caller MUST save it now.
+    """
     tenant_id = str(uuid.uuid4())
+    plaintext_key = secrets.token_urlsafe(32)
 
     async with get_db_session() as conn:
         await conn.execute(
-            "INSERT INTO tenants (id, name) VALUES ($1, $2)",
-            tenant_id, body.name
+            "INSERT INTO tenants (id, name, sha256_key) VALUES ($1, $2, $3)",
+            tenant_id, body.name, hash_key(plaintext_key)
         )
 
-    return TenantResponse(id=tenant_id, name=body.name)
+    return TenantCreateResponse(id=tenant_id, name=body.name, tenant_key=plaintext_key)
 
 
 @router.get("", response_model=list[TenantResponse])
 async def list_tenants() -> list[TenantResponse]:
-    """List all tenants."""
+    """List all tenants — never exposes the sha256_key."""
     async with get_db_session() as conn:
         rows = await conn.fetch("SELECT id, name FROM tenants ORDER BY name")
 
@@ -40,7 +40,7 @@ async def list_tenants() -> list[TenantResponse]:
 
 @router.get("/{tenant_id}", response_model=TenantResponse)
 async def get_tenant(tenant_id: str) -> TenantResponse:
-    """Get a specific tenant by id."""
+    """Get a specific tenant by id — never exposes the sha256_key."""
     async with get_db_session() as conn:
         row = await conn.fetchrow(
             "SELECT id, name FROM tenants WHERE id = $1",
