@@ -1,11 +1,13 @@
 name: Deploy Control Plane
 
-# Manually triggered — select environment and provide version before deploying.
+# Manually triggered — select environment. No version input needed.
+# Image tag is derived from the current git SHA — same commit always produces same image.
+#
 # Flow:
-#   1. Tag the git repo with the version
-#   2. Build Docker image tagged with version + branch + commit SHA
-#   3. Push to Azure Container Registry
-#   4. Update Container App (triggers restart → migration → FastAPI start)
+#   1. Compute image tag from branch + short SHA
+#   2. If image already exists in ACR → skip build (cheap re-deploy)
+#   3. If not → build and push
+#   4. Update Container App to use this image
 on:
   workflow_dispatch:
     inputs:
@@ -16,14 +18,10 @@ on:
         options:
           - DEV
           - PROD
-      version:
-        description: "Version tag (e.g. v0.1.0)"
-        required: true
-        type: string
 
 jobs:
   deploy:
-    name: "Deploy ${{ inputs.version }} → ${{ inputs.env }}"
+    name: "Deploy → ${{ inputs.env }}"
     runs-on: ubuntu-latest
 
     # SP credentials looked up dynamically from org-level secrets using uppercase ENV.
@@ -52,16 +50,14 @@ jobs:
           echo "CONTAINER_APP=ca-sdlc-base-${{ env.ENV_LOWER }}"         >> $GITHUB_ENV
           echo "RESOURCE_GROUP=rg-sdlc-base-${{ env.ENV_LOWER }}"        >> $GITHUB_ENV
 
-      # Full image tag — version + branch + short SHA so you can identify exactly
-      # which version and branch a running container came from.
-      # Example: v0.1.0-main-abc1234
-      - name: Set image tags
+      # Image tag is deterministic from git SHA — same commit → same tag → same image.
+      # Redeploying the same commit finds the image already in ACR and skips build.
+      - name: Set image tag
         run: |
           BASE="${{ env.ACR_SERVER }}/control-plane"
-          FULL_TAG="${{ inputs.version }}-${{ env.BRANCH }}-${{ env.SHORT_SHA }}"
-          echo "IMAGE_FULL=$BASE:$FULL_TAG"          >> $GITHUB_ENV
-          echo "IMAGE_VERSION=$BASE:${{ inputs.version }}" >> $GITHUB_ENV
-          echo "IMAGE_LATEST=$BASE:latest"            >> $GITHUB_ENV
+          TAG="${{ env.BRANCH }}-${{ env.SHORT_SHA }}"
+          echo "IMAGE=$BASE:$TAG"      >> $GITHUB_ENV
+          echo "IMAGE_TAG=$TAG"        >> $GITHUB_ENV
 
       - name: Azure Login
         run: |
@@ -71,31 +67,38 @@ jobs:
             --tenant "$ARM_TENANT_ID"
           az account set --subscription "$ARM_SUBSCRIPTION_ID"
 
+      # Check whether the image for this exact commit already exists in ACR.
+      # If yes → skip build and push (fast redeploy path).
+      - name: Check if image exists in ACR
+        id: check_image
+        run: |
+          if az acr repository show-tags --name "${{ env.ACR_NAME }}" --repository control-plane 2>/dev/null | grep -q "\"${{ env.IMAGE_TAG }}\""; then
+            echo "exists=true"  >> $GITHUB_OUTPUT
+            echo "Image ${{ env.IMAGE }} already exists in ACR — skipping build"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Image ${{ env.IMAGE }} not in ACR — will build"
+          fi
+
       - name: Login to Container Registry
+        if: steps.check_image.outputs.exists == 'false'
         run: az acr login --name "${{ env.ACR_NAME }}"
 
-      # Build with all three tags at once
       - name: Build Docker image
-        run: |
-          docker build \
-            -t "${{ env.IMAGE_FULL }}" \
-            -t "${{ env.IMAGE_VERSION }}" \
-            -t "${{ env.IMAGE_LATEST }}" \
-            .
+        if: steps.check_image.outputs.exists == 'false'
+        run: docker build -t "${{ env.IMAGE }}" .
 
       - name: Push Docker image
-        run: |
-          docker push "${{ env.IMAGE_FULL }}"
-          docker push "${{ env.IMAGE_VERSION }}"
-          docker push "${{ env.IMAGE_LATEST }}"
+        if: steps.check_image.outputs.exists == 'false'
+        run: docker push "${{ env.IMAGE }}"
 
-      # Deploy with the full tag so the container name tells you exactly what is running
+      # Always update — even if image existed, we want Container App to restart with it
       - name: Deploy to Container App
         run: |
           az containerapp update \
             --name "${{ env.CONTAINER_APP }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --image "${{ env.IMAGE_FULL }}"
+            --image "${{ env.IMAGE }}"
 
       - name: Show deployment info
         run: |
@@ -103,8 +106,8 @@ jobs:
             --name "${{ env.CONTAINER_APP }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "Version  : ${{ inputs.version }}"
           echo "Branch   : ${{ env.BRANCH }}"
           echo "Commit   : ${{ env.SHORT_SHA }}"
-          echo "Image    : ${{ env.IMAGE_FULL }}"
+          echo "Image    : ${{ env.IMAGE }}"
+          echo "Built    : ${{ steps.check_image.outputs.exists == 'false' }}"
           echo "URL      : https://$FQDN"
