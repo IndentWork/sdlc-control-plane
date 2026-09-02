@@ -17,6 +17,7 @@ One row per onboarded tenant. This is the central registry.
 | `name` | VARCHAR | NOT NULL | Human-readable org name, e.g. "Acme Corp" |
 | `github_org` | VARCHAR | NOT NULL, UNIQUE | GitHub organisation slug, e.g. "acme-corp". Used to match incoming OIDC tokens |
 | `tier` | VARCHAR | NOT NULL, CHECK (`shared` or `dedicated`) | Infrastructure tier chosen at onboarding. `shared` = shared Azure resources with metadata isolation. `dedicated` = own VNet and resources, full isolation |
+| `resource_code` | VARCHAR(8) | NOT NULL, UNIQUE | First 8 hex chars of SHA256(github_org). Generated at onboarding for all tenants. Used to name Azure resources for dedicated tenants: `vnet-sdlc-{code}-dev`, `psql-sdlc-{code}-dev`, `kv-sdlc-{code}-dev` |
 
 **Indexes:**
 - `ix_tenants_github_org` — unique partial index on `github_org WHERE github_org != ''`
@@ -78,6 +79,7 @@ Even if FastAPI is compromised, an attacker cannot destroy the schema.
 | 003 | `003_replace_key_with_github_org.py` | Drops `sha256_key`, adds `github_org`. SHA256 auth replaced by GitHub OIDC |
 | 004 | `004_create_tenant_github_repos.py` | Creates `tenant_github_repos` table for per-repo access control |
 | 005 | `005_add_tier_to_tenants.py` | Adds `tier` column (`shared` or `dedicated`) to `tenants` |
+| 006 | `006_add_resource_code_to_tenants.py` | Adds `resource_code` — SHA256(github_org)[:8] for Azure resource naming |
 
 ---
 

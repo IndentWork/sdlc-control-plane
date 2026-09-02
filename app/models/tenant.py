@@ -18,7 +18,9 @@ class Tenant(Base):
     id:         Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name:       Mapped[str] = mapped_column(String, nullable=False)
     github_org: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    tier:       Mapped[str] = mapped_column(String, nullable=False)  # "shared" or "dedicated"
+    tier:          Mapped[str] = mapped_column(String, nullable=False)  # "shared" or "dedicated"
+    resource_code: Mapped[str] = mapped_column(String(8), nullable=False, unique=True)  # SHA256(github_org)[:8] — used to name Azure resources
+    org_code:   Mapped[str] = mapped_column(String(8), nullable=False, unique=True)  # SHA256(github_org)[:8]
 
 
 class TenantGithubRepo(Base):
