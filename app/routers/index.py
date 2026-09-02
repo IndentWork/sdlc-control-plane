@@ -1,30 +1,22 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends
 
 from app.db import get_db_session
 from app.schemas.index import IndexRequest, IndexResponse
-from app.security import hash_key
+from app.security import verified_tenant
 
 router = APIRouter(prefix="/index", tags=["index"])
 
 
 @router.post("", response_model=IndexResponse)
-async def request_index(request: IndexRequest) -> IndexResponse:
+async def request_index(
+    request: IndexRequest,
+    tenant: dict = Depends(verified_tenant),
+) -> IndexResponse:
     """
-    Accept an indexing request from a tenant.
-    Verifies the tenant_key by comparing SHA256(key) against tenants.sha256_key.
-
-    Returns 401 if the key does not match any tenant.
-    Actual indexing (Service Bus queue push) is a later task.
+    Accept an indexing request from a tenant pipeline.
+    Auth: GitHub OIDC Bearer token — validated and resolved to a tenant by verified_tenant.
+    TODO: put message on Service Bus index-request queue.
     """
-    async with get_db_session() as conn:
-        tenant = await conn.fetchrow(
-            "SELECT id, name FROM tenants WHERE sha256_key = $1",
-            hash_key(request.tenant_key)
-        )
-
-    if tenant is None:
-        raise HTTPException(status_code=401, detail="Invalid tenant_key")
-
     # TODO: put message on Service Bus index-request queue
     return IndexResponse(
         job_id=f"stub-job-{tenant['id']}",

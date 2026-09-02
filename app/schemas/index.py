@@ -5,14 +5,14 @@ from pydantic import BaseModel
 class IndexRequest(BaseModel):
     """
     Request body for POST /index.
-    tenant_key is the plaintext key — server hashes it and looks up by hash.
+    Auth is via GitHub OIDC Bearer token in the Authorization header —
+    no tenant_key in the body. Token validation is handled by middleware.
     """
-    tenant_key: str
     project_name: str
-    repos: list[str]
+    repos:        list[str]
 
 
 class IndexResponse(BaseModel):
     """Response for POST /index — job_id to poll, message with human-readable status."""
-    job_id: str
+    job_id:  str
     message: str
