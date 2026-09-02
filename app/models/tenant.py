@@ -18,6 +18,7 @@ class Tenant(Base):
     id:         Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name:       Mapped[str] = mapped_column(String, nullable=False)
     github_org: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    tier:       Mapped[str] = mapped_column(String, nullable=False)  # "shared" or "dedicated"
 
 
 class TenantGithubRepo(Base):

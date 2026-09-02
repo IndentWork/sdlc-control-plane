@@ -16,6 +16,7 @@ One row per onboarded tenant. This is the central registry.
 | `id` | VARCHAR | PRIMARY KEY | UUID generated at creation time |
 | `name` | VARCHAR | NOT NULL | Human-readable org name, e.g. "Acme Corp" |
 | `github_org` | VARCHAR | NOT NULL, UNIQUE | GitHub organisation slug, e.g. "acme-corp". Used to match incoming OIDC tokens |
+| `tier` | VARCHAR | NOT NULL, CHECK (`shared` or `dedicated`) | Infrastructure tier chosen at onboarding. `shared` = shared Azure resources with metadata isolation. `dedicated` = own VNet and resources, full isolation |
 
 **Indexes:**
 - `ix_tenants_github_org` — unique partial index on `github_org WHERE github_org != ''`
@@ -76,6 +77,7 @@ Even if FastAPI is compromised, an attacker cannot destroy the schema.
 | 002 | `002_add_tenant_key.py` | Added `sha256_key` column — **superseded by 003** |
 | 003 | `003_replace_key_with_github_org.py` | Drops `sha256_key`, adds `github_org`. SHA256 auth replaced by GitHub OIDC |
 | 004 | `004_create_tenant_github_repos.py` | Creates `tenant_github_repos` table for per-repo access control |
+| 005 | `005_add_tier_to_tenants.py` | Adds `tier` column (`shared` or `dedicated`) to `tenants` |
 
 ---
 
