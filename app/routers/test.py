@@ -38,6 +38,10 @@ async def test_storage(tenant_id: str) -> dict:
         "resource_code": tenant["resource_code"],
     }
 
-    await send_message(tenant["tier"], tenant["resource_code"], payload)
+    try:
+        await send_message(tenant["tier"], tenant["resource_code"], payload)
+    except Exception as exc:
+        # Return full error for debugging — remove before production
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return {"status": "queued", "tenant_id": tenant_id, "queue": "repo-index"}
