@@ -22,26 +22,29 @@ async def test_storage(tenant_id: str) -> dict:
     Trigger a test message on Service Bus for the given tenant.
     The Indexing Worker creates hello.txt in the tenant's Storage configs container.
     """
-    async with get_db_session() as conn:
-        tenant = await conn.fetchrow(
-            "SELECT id, tier, resource_code FROM tenants WHERE id = $1",
-            tenant_id,
-        )
-
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    payload = {
-        "action": "test_storage",
-        "tenant_id": tenant["id"],
-        "tier": tenant["tier"],
-        "resource_code": tenant["resource_code"],
-    }
-
     try:
-        await send_message(tenant["tier"], tenant["resource_code"], payload)
-    except Exception as exc:
-        # Return full error for debugging — remove before production
-        raise HTTPException(status_code=500, detail=str(exc))
+        async with get_db_session() as conn:
+            tenant = await conn.fetchrow(
+                "SELECT id, tier, resource_code FROM tenants WHERE id = $1",
+                tenant_id,
+            )
 
-    return {"status": "queued", "tenant_id": tenant_id, "queue": "repo-index"}
+        if tenant is None:
+            raise HTTPException(status_code=404, detail="Tenant not found")
+
+        payload = {
+            "action": "test_storage",
+            "tenant_id": tenant["id"],
+            "tier": tenant["tier"],
+            "resource_code": tenant["resource_code"],
+        }
+
+        await send_message(tenant["tier"], tenant["resource_code"], payload)
+
+        return {"status": "queued", "tenant_id": tenant_id, "queue": "repo-index"}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Return full error detail for debugging — remove before production
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
