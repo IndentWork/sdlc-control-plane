@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.19.1",
     "asyncpg>=0.31.0",
     "azure-identity>=1.25.3",
+    "azure-servicebus>=7.14.2",
     "fastapi>=0.141.1",
     "psycopg2-binary>=2.9.12",
     "PyJWT[cryptography]>=2.10.1",
