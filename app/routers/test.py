@@ -25,9 +25,8 @@ async def test_storage(tenant: dict = Depends(verified_tenant)) -> dict:
     """
     payload = {
         "action":        "test_storage",
-        "tenant_id":     tenant["id"],
-        "tier":          tenant["tier"],
         "resource_code": tenant["resource_code"],
+        "tier":          tenant["tier"],
     }
 
     try:
@@ -36,8 +35,7 @@ async def test_storage(tenant: dict = Depends(verified_tenant)) -> dict:
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
     return {
-        "status":    "queued",
-        "tenant_id": tenant["id"],
-        "org":       tenant["github_org"],
-        "queue":     "repo-index",
+        "status": "queued",
+        "org":    tenant["github_org"],
+        "queue":  "repo-index",
     }
