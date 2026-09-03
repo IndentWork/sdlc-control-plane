@@ -1,15 +1,12 @@
 """
 Test router — validates end-to-end connectivity: FastAPI → Service Bus → Worker → Storage.
 
-GET /tenant/test_storage
-  - Caller authenticates with a GitHub OIDC token (Authorization: Bearer {token})
-  - verified_tenant dependency validates the token and resolves the tenant from DB
-  - Puts a test message on the tenant's Service Bus repo-index queue
-  - The worker picks it up and creates hello.txt in the configs container
+GET  /tenant/test_storage   — puts test message, worker writes hello.txt
+POST /tenant/upload_sdlc    — receives raw YAML, worker saves as sdlc.yml in Storage
 
 Remove this router once the real sync endpoint is working.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.security import verified_tenant
 from app.services.servicebus import send_message
@@ -31,6 +28,40 @@ async def test_storage(tenant: dict = Depends(verified_tenant)) -> dict:
 
     try:
         await send_message(tenant["tier"], tenant["resource_code"], payload)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+    return {
+        "status": "queued",
+        "org":    tenant["github_org"],
+        "queue":  "repo-index",
+    }
+
+
+@router.post("/upload_sdlc")
+async def upload_sdlc(request: Request, tenant: dict = Depends(verified_tenant)) -> dict:
+    """
+    Receive raw sdlc.yml content and queue it for the worker to save to Storage.
+    Body: raw YAML text (Content-Type: text/plain or application/x-yaml).
+    Worker saves it as configs/{resource_code}/sdlc.yml.
+    """
+    try:
+        yaml_content = (await request.body()).decode("utf-8")
+
+        if not yaml_content.strip():
+            raise HTTPException(status_code=400, detail="Request body is empty")
+
+        payload = {
+            "action":        "upload_sdlc",
+            "resource_code": tenant["resource_code"],
+            "tier":          tenant["tier"],
+            "content":       yaml_content,
+        }
+
+        await send_message(tenant["tier"], tenant["resource_code"], payload)
+
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
