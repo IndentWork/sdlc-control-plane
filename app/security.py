@@ -87,7 +87,7 @@ async def _lookup_tenant(github_org: str, repo_name: str) -> dict:
     """
     async with get_db_session() as conn:
         tenant = await conn.fetchrow(
-            "SELECT id, name, github_org FROM tenants WHERE github_org = $1",
+            "SELECT id, name, github_org, tier, resource_code FROM tenants WHERE github_org = $1",
             github_org,
         )
 
