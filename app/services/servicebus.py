@@ -1,9 +1,12 @@
 """
-Service Bus sender — puts messages on the repo-index queue.
+Service Bus sender — publishes messages to the sdlc-events topic.
 
 The namespace is derived from the tenant's tier and resource_code:
   shared    → sb-sdlc-shared-{env}
   dedicated → sb-sdlc-{resource_code}-{env}
+
+The action field is set as an application property so Service Bus can route
+the message to the correct subscription based on SQL filter rules.
 
 Authentication uses DefaultAzureCredential (Managed Identity in Azure,
 az CLI credentials locally). No connection string or key stored in code.
@@ -28,13 +31,18 @@ def _namespace_for(tier: str, resource_code: str) -> str:
 
 async def send_message(tier: str, resource_code: str, payload: dict) -> None:
     """
-    Send a single JSON message to the repo-index queue.
-    Opens a connection, sends, then closes — no long-lived connection held.
+    Publish a message to the sdlc-events topic.
+    The action field (from payload) is set as an application property so
+    Service Bus subscriptions can filter on it.
+    Opens a connection, publishes, then closes — no long-lived connection held.
     """
     namespace = _namespace_for(tier, resource_code)
     credential = DefaultAzureCredential()
 
     async with ServiceBusClient(namespace, credential) as client:
-        async with client.get_queue_sender("repo-index") as sender:
-            message = ServiceBusMessage(json.dumps(payload))
+        async with client.get_topic_sender("sdlc-events") as sender:
+            message = ServiceBusMessage(
+                json.dumps(payload),
+                application_properties={"action": payload.get("action")}
+            )
             await sender.send_messages(message)
