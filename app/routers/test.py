@@ -5,6 +5,9 @@ GET  /tenant/test_storage   — puts test message, worker writes hello.txt
 POST /tenant/upload_sdlc    — receives raw YAML, worker saves as sdlc.yml in Storage
 POST /tenant/index          — triggers indexing worker to index repos from sdlc.yml
 
+All payloads include github_org so workers can build the correct storage path:
+  sdlc/{resource_code}/{github_org}/...
+
 Remove this router once the real sync endpoint is working.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +27,7 @@ async def test_storage(tenant: dict = Depends(verified_tenant)) -> dict:
     payload = {
         "action":        "test_storage",
         "resource_code": tenant["resource_code"],
+        "github_org":    tenant["github_org"],
         "tier":          tenant["tier"],
     }
 
@@ -44,7 +48,7 @@ async def upload_sdlc(request: Request, tenant: dict = Depends(verified_tenant))
     """
     Receive raw sdlc.yml content and queue it for the worker to save to Storage.
     Body: raw YAML text (Content-Type: text/plain or application/x-yaml).
-    Worker saves it as configs/{resource_code}/sdlc.yml.
+    Worker saves it to: sdlc/{resource_code}/{github_org}/sdlc.yml
     """
     try:
         yaml_content = (await request.body()).decode("utf-8")
@@ -55,6 +59,7 @@ async def upload_sdlc(request: Request, tenant: dict = Depends(verified_tenant))
         payload = {
             "action":        "upload_sdlc",
             "resource_code": tenant["resource_code"],
+            "github_org":    tenant["github_org"],
             "tier":          tenant["tier"],
             "content":       yaml_content,
         }
@@ -78,12 +83,13 @@ async def trigger_indexing(tenant: dict = Depends(verified_tenant)) -> dict:
     """
     Trigger the indexing worker to index all repos defined in sdlc.yml.
     sdlc.yml must already be uploaded to Storage via POST /tenant/upload_sdlc.
-    Indexing worker reads sdlc.yml from Storage and indexes all repos.
+    Indexing worker reads from: sdlc/{resource_code}/{github_org}/sdlc.yml
     """
     try:
         payload = {
             "action":        "index_repos",
             "resource_code": tenant["resource_code"],
+            "github_org":    tenant["github_org"],
             "tier":          tenant["tier"],
         }
 
