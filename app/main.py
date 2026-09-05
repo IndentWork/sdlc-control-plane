@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.routers import index, tenants, test
+from app.routers import index, tenants, tenant
 from app.db import run_migrations
 
 
@@ -24,7 +24,7 @@ app = FastAPI(
 
 app.include_router(index.router)
 app.include_router(tenants.router)
-app.include_router(test.router)
+app.include_router(tenant.router)
 
 
 @app.get("/health")
