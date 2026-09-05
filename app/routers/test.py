@@ -3,6 +3,7 @@ Test router — validates end-to-end connectivity: FastAPI → Service Bus → W
 
 GET  /tenant/test_storage   — puts test message, worker writes hello.txt
 POST /tenant/upload_sdlc    — receives raw YAML, worker saves as sdlc.yml in Storage
+POST /tenant/index          — triggers indexing worker to index repos from sdlc.yml
 
 Remove this router once the real sync endpoint is working.
 """
@@ -69,4 +70,30 @@ async def upload_sdlc(request: Request, tenant: dict = Depends(verified_tenant))
         "status": "queued",
         "org":    tenant["github_org"],
         "queue":  "repo-index",
+    }
+
+
+@router.post("/index")
+async def trigger_indexing(tenant: dict = Depends(verified_tenant)) -> dict:
+    """
+    Trigger the indexing worker to index all repos defined in sdlc.yml.
+    sdlc.yml must already be uploaded to Storage via POST /tenant/upload_sdlc.
+    Indexing worker reads sdlc.yml from Storage and indexes all repos.
+    """
+    try:
+        payload = {
+            "action":        "index_repos",
+            "resource_code": tenant["resource_code"],
+            "tier":          tenant["tier"],
+        }
+
+        await send_message(tenant["tier"], tenant["resource_code"], payload)
+
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+    return {
+        "status": "queued",
+        "org":    tenant["github_org"],
+        "action": "index_repos",
     }
